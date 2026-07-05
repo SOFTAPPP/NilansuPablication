@@ -51,7 +51,7 @@ class Logger {
   private formatPayload(payload?: any) {
     if (!payload) return '';
     const masked = maskSensitiveData(payload);
-    // Truncate huge payloads for console
+    // Truncate huge payloads for consoles
     let str = util.inspect(masked, { depth: 4, colors: true, breakLength: 80 });
     if (str.length > 2000) {
       str = str.substring(0, 2000) + `\n...[Truncated ${str.length - 2000} more chars]`;
