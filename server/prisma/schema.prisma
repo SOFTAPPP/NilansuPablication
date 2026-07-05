@@ -1,0 +1,186 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  name        String   @unique @db.VarChar(255)
+  slug        String   @unique @db.VarChar(255)
+  createdAt   DateTime @default(now())
+  description String?
+  image_path  String?  @db.VarChar(512)
+  orderIndex  Int      @default(0)
+  books       Book[]
+
+  @@index([createdAt])
+  @@index([orderIndex, createdAt])
+}
+
+model Publication {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @unique @db.VarChar(255)
+  slug      String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now())
+  books     Book[]   @relation("BookToPublication")
+
+  @@index([createdAt])
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model Book {
+  id            String        @id @default(uuid()) @db.VarChar(36)
+  title         String        @db.VarChar(255)
+  slug          String        @unique @db.VarChar(255)
+  author        String?       @db.VarChar(255)
+  description   String?
+  coverImage    String?       @db.VarChar(512)
+  price         Float
+  isOnSale      Boolean       @default(false)
+  oldPrice      Float?
+  stock         Int           @default(0)
+  format        String        @default("Paperback") @db.VarChar(50)
+  publishedDate DateTime      @default(now())
+  rating        Float         @default(0)
+  reviewCount   Int           @default(0)
+  isTrending    Boolean       @default(false)
+  categoryId    String        @db.VarChar(36)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  stockStatus   String        @default("in_stock") @db.VarChar(50)
+  isbn          String?       @db.VarChar(50)
+  category      Category      @relation(fields: [categoryId], references: [id])
+  orderItems    OrderItem[]
+  reviews       Review[]
+  publications  Publication[] @relation("BookToPublication")
+
+  @@index([categoryId, createdAt])
+  @@index([categoryId, price])
+  @@index([categoryId, rating])
+  @@index([categoryId, publishedDate])
+  @@index([isOnSale])
+  @@index([isTrending])
+  @@index([createdAt])
+  @@index([title])
+  @@index([author])
+  @@index([publishedDate(sort: Desc), id(sort: Desc)])
+  @@index([price, id])
+  @@index([price(sort: Desc), id(sort: Desc)], map: "Book_price_desc_id_desc_idx")
+  @@index([rating(sort: Desc), id(sort: Desc)])
+  @@index([isTrending(sort: Desc), id(sort: Desc)])
+  @@index([categoryId, isTrending(sort: Desc), id(sort: Desc)], map: "Book_catId_trending_id_desc_idx")
+  @@index([isOnSale], map: "idx_books_on_sale")
+}
+
+model User {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @db.VarChar(255)
+  email     String   @unique @db.VarChar(255)
+  password  String   @db.VarChar(255)
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@index([email])
+}
+
+model Order {
+  id                            String      @id @default(uuid()) @db.VarChar(36)
+  orderNumber                   String      @unique @db.VarChar(50)
+  fullName                      String      @db.VarChar(255)
+  email                         String      @db.VarChar(255)
+  phone                         String      @db.VarChar(50)
+  street                        String      @db.VarChar(255)
+  city                          String      @db.VarChar(255)
+  state                         String      @db.VarChar(255)
+  pinCode                       String      @db.VarChar(50)
+  discount                      Float       @default(0)
+  status                        String      @default("Pending") @db.VarChar(50)
+  createdAt                     DateTime    @default(now())
+  userId                        String?     @db.VarChar(36)
+  currency                      String      @default("INR") @db.VarChar(10)
+  paidAt                        DateTime?
+  razorpayOrderId               String?     @unique @db.VarChar(255)
+  razorpayPaymentId             String?     @db.VarChar(255)
+  receipt                       String?     @db.VarChar(255)
+  webhookEventId                String?     @db.VarChar(255)
+  codCharge                     Float       @default(0)
+  finalAmount                   Float       @default(0)
+  orderStatus                   String      @default("PLACED") @db.VarChar(50)
+  paymentMethod                 String      @default("PREPAID") @db.VarChar(50)
+  paymentStatus                 String      @default("PENDING") @db.VarChar(50)
+  productSubtotal               Float       @default(0)
+  shippingCharge                Float       @default(0)
+  shippingSyncStatus            String      @default("PENDING") @db.VarChar(50)
+  shiprocketAwbCode             String?     @unique @db.VarChar(100)
+  shiprocketCourierCompanyId    Int?
+  shiprocketCourierName         String?     @db.VarChar(255)
+  shiprocketCreatedAt           DateTime?
+  shiprocketErrorMessage        String?
+  shiprocketInvoiceUrl          String?     @db.VarChar(512)
+  shiprocketLabelUrl            String?     @db.VarChar(512)
+  shiprocketManifestUrl         String?     @db.VarChar(512)
+  shiprocketOrderId             Int?        @unique
+  shiprocketPickupScheduledDate DateTime?
+  shiprocketRawResponse         Json?
+  shiprocketShipmentId          Int?        @unique
+  shiprocketStatus              String?     @db.VarChar(255)
+  shiprocketStatusId            Int?
+  shiprocketTrackingUrl         String?     @db.VarChar(512)
+  shiprocketUpdatedAt           DateTime?
+  user                          User?       @relation(fields: [userId], references: [id])
+  items                         OrderItem[]
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([orderStatus])
+  @@index([shiprocketOrderId])
+  @@index([shiprocketShipmentId])
+  @@index([shiprocketAwbCode])
+  @@index([createdAt])
+  @@index([status], map: "idx_orders_status")
+}
+
+model OrderItem {
+  id        String @id @default(uuid()) @db.VarChar(36)
+  orderId   String @db.VarChar(36)
+  bookId    String @db.VarChar(36)
+  quantity  Int
+  unitPrice Float
+  book      Book   @relation(fields: [bookId], references: [id])
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model Review {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  bookId       String   @db.VarChar(36)
+  reviewerName String   @db.VarChar(100)
+  rating       Int
+  title        String?  @db.VarChar(255)
+  comment      String
+  isVerified   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId, createdAt])
+}
+
+model WebhookLog {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  eventId     String   @unique @db.VarChar(255)
+  processedAt DateTime @default(now())
+
+  @@index([eventId])
+}
+
+enum Role {
+  USER
+  ADMIN
+}
