@@ -952,6 +952,68 @@ app.post('/api/payment/create-order', optionalAuthenticateToken, async (req: any
   }
 });
 
+// Background Shiprocket Sync Helper
+async function syncShiprocketBackground(
+  orderId: string,
+  tempOrderId: string,
+  shiprocketPayload: any,
+  isPrepaid: boolean,
+  fullName: string,
+  email: string,
+  razorpay_payment_id?: string
+) {
+  try {
+    const shiprocketRes = await createShiprocketOrder(shiprocketPayload);
+    logger.info(`Background Shiprocket API Create Order Response: ` + JSON.stringify(shiprocketRes, null, 2));
+
+    if (shiprocketRes.status_code !== 1) {
+      throw new Error(JSON.stringify(shiprocketRes));
+    }
+
+    // Success: Update Order in DB
+    await prisma.order.update({
+      where: { id: tempOrderId },
+      data: {
+        shiprocketOrderId: shiprocketRes.order_id,
+        shiprocketShipmentId: shiprocketRes.shipment_id,
+        shippingSyncStatus: 'CREATED',
+        shiprocketCreatedAt: new Date(),
+        orderStatus: 'PLACED',
+        status: isPrepaid ? 'Paid' : 'Confirmed'
+      }
+    });
+
+  } catch (error: any) {
+    const errorMessage = error.message || String(error);
+    logger.error(errorMessage, 'Background Shiprocket sync failed');
+
+    // Failure: Update Order in DB to FAILED sync
+    await prisma.order.update({
+      where: { id: tempOrderId },
+      data: {
+        shippingSyncStatus: 'FAILED',
+        shiprocketErrorMessage: errorMessage,
+        orderStatus: 'TECHNICAL_ERROR',
+        status: isPrepaid ? 'Paid' : 'Failed' // Keep Prepaid as Paid because money was captured
+      }
+    });
+
+    // Send Alert Email
+    const alertTitle = isPrepaid ? 'CRITICAL: PREPAID Order Failed Shiprocket Sync (Action Required)' : 'CRITICAL: COD Order Failed Shiprocket Sync (Action Required)';
+    let alertBody = `<p>An order was successfully placed by the customer, but Shiprocket rejected the automatic sync. <b>Stock WAS deducted normally</b>.</p>
+         <p><b>Customer:</b> ${fullName} (${email})</p>
+         <p><b>Order Number:</b> ${orderId}</p>
+         <p><b>Error Details:</b> ${errorMessage}</p>
+         <p><b>Action:</b> You must manually fulfill this order in the Shiprocket dashboard.</p>`;
+    
+    if (isPrepaid && razorpay_payment_id) {
+       alertBody += `<p><b>Razorpay Payment ID:</b> ${razorpay_payment_id}</p>`;
+    }
+
+    await sendAdminAlert(alertTitle, alertBody).catch(err => logger.error(err, 'Email send failed'));
+  }
+}
+
 // Verify Payment
 app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res) => {
   try {
@@ -996,14 +1058,79 @@ app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res)
     
     const pricing = calculateOrderTotal(validItems, 'PREPAID', Number(discount));
 
-    // 3. Attempt Shiprocket Sync FIRST synchronously
+    // 3. Create DB Order IMMEDIATELY
     const tempOrderId = crypto.randomUUID();
-    let shiprocketRes: any = null;
-    let shiprocketFailed = false;
-    let shiprocketError = '';
+    
+    const order = await prisma.$transaction(async (tx) => {
+      const newOrder = await tx.order.create({
+        data: {
+          id: tempOrderId,
+          orderNumber, fullName, email, phone, street, city, state, pinCode,
+          productSubtotal: pricing.productSubtotal,
+          shippingCharge: pricing.shippingCharge,
+          codCharge: pricing.codCharge,
+          discount: pricing.discount,
+          finalAmount: pricing.finalAmount,
+          paymentMethod: 'PREPAID',
+          paymentStatus: 'SUCCESS',
+          orderStatus: 'PLACED',
+          status: "Paid",
+          razorpayOrderId: razorpay_order_id,
+          razorpayPaymentId: razorpay_payment_id,
+          paidAt: new Date(),
+          userId: req.user ? req.user.id : null,
+          shippingSyncStatus: 'PENDING',
+          items: {
+            create: validItems.map((item: any) => ({
+              bookId: item.bookId, quantity: item.quantity, unitPrice: item.unitPrice
+            }))
+          }
+        }
+      });
+      
+      // Decrease stock atomically
+      for (const item of validItems) {
+        const result = await tx.book.updateMany({
+          where: { id: item.bookId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } }
+        });
+        if (result.count > 0) {
+          const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
+          if (updatedBook) {
+            let newStatus = 'in_stock';
+            if (updatedBook.stock === 0) newStatus = 'out_of_stock';
+            else if (updatedBook.stock <= 5) newStatus = 'low_stock';
+            await tx.book.update({
+              where: { id: item.bookId },
+              data: { stockStatus: newStatus }
+            });
+          }
+        }
+      }
+      return newOrder;
+    });
 
-      try {
-        const shiprocketPayload = {
+    const finalOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+      include: { items: { include: { book: true } } }
+    });
+
+    if (finalOrder) {
+        sendCustomerReceiptEmail(
+          email, fullName, orderNumber,
+          finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
+          pricing.finalAmount,
+          `${street}, ${city}, ${state} - ${pinCode}`
+        ).catch(err => logger.error(err, 'Email send failed'));
+        sendAdminNewOrderEmail('nilansupublication@gmail.com', {
+          orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'PREPAID',
+          subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
+          items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
+        }).catch(err => logger.error(err, 'Email send failed'));
+    }
+
+    // 4. Trigger Shiprocket Sync Asynchronously in Background
+    const shiprocketPayload = {
          order_id: orderNumber,
          order_date: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).substring(0, 16).replace('T', ' '),
          pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || 'Primary',
@@ -1039,107 +1166,10 @@ app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res)
          total_discount: pricing.discount,
          sub_total: pricing.productSubtotal,
          length: 10, breadth: 10, height: 10, weight: 0.5
-      };
-      
-      shiprocketRes = await createShiprocketOrder(shiprocketPayload);
-      logger.info('Shiprocket API Create Order Response (PREPAID): ' + JSON.stringify(shiprocketRes, null, 2));
-
-      if (shiprocketRes.status_code !== 1) {
-         throw new Error(JSON.stringify(shiprocketRes));
-      }
-    } catch (e: any) {
-      shiprocketFailed = true;
-      shiprocketError = e.message || String(e);
-      logger.error(shiprocketError, 'Shiprocket sync failed for prepaid order');
-    }
-
-    // 4. Create DB Order based on Shiprocket status
-    const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
-        data: {
-          id: tempOrderId,
-          orderNumber, fullName, email, phone, street, city, state, pinCode,
-          productSubtotal: pricing.productSubtotal,
-          shippingCharge: pricing.shippingCharge,
-          codCharge: pricing.codCharge,
-          discount: pricing.discount,
-          finalAmount: pricing.finalAmount,
-          paymentMethod: 'PREPAID',
-          paymentStatus: 'SUCCESS', // Payment was captured by Razorpay
-          orderStatus: shiprocketFailed ? 'TECHNICAL_ERROR' : 'PLACED',
-          status: shiprocketFailed ? "Failed" : "Paid",
-          razorpayOrderId: razorpay_order_id,
-          razorpayPaymentId: razorpay_payment_id,
-          paidAt: new Date(),
-          userId: req.user ? req.user.id : null,
-          shiprocketOrderId: shiprocketRes ? shiprocketRes.order_id : null,
-          shiprocketShipmentId: shiprocketRes ? shiprocketRes.shipment_id : null,
-          shippingSyncStatus: shiprocketFailed ? 'FAILED' : 'CREATED',
-          shiprocketErrorMessage: shiprocketFailed ? shiprocketError : null,
-          shiprocketCreatedAt: shiprocketFailed ? null : new Date(),
-          items: {
-            create: validItems.map((item: any) => ({
-              bookId: item.bookId, quantity: item.quantity, unitPrice: item.unitPrice
-            }))
-          }
-        }
-      });
-      
-      // ONLY decrease stock if shiprocket succeeded
-      if (!shiprocketFailed) {
-        for (const item of validItems) {
-          const result = await tx.book.updateMany({
-            where: { id: item.bookId, stock: { gte: item.quantity } },
-            data: { stock: { decrement: item.quantity } }
-          });
-          if (result.count > 0) {
-            const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
-            if (updatedBook) {
-              let newStatus = 'in_stock';
-              if (updatedBook.stock === 0) newStatus = 'out_of_stock';
-              else if (updatedBook.stock <= 5) newStatus = 'low_stock';
-              await tx.book.update({
-                where: { id: item.bookId },
-                data: { stockStatus: newStatus }
-              });
-            }
-          }
-        }
-      }
-      return newOrder;
-    });
-
-    const finalOrder = await prisma.order.findUnique({
-      where: { id: order.id },
-      include: { items: { include: { book: true } } }
-    });
-
-    if (finalOrder) {
-        sendCustomerReceiptEmail(
-          email, fullName, orderNumber,
-          finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
-          pricing.finalAmount,
-          `${street}, ${city}, ${state} - ${pinCode}`
-        ).catch(err => logger.error(err, 'Email send failed'));
-        sendAdminNewOrderEmail('nilansupublication@gmail.com', {
-          orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'PREPAID',
-          subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
-          items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
-        }).catch(err => logger.error(err, 'Email send failed'));
-    }
-
-    if (shiprocketFailed) {
-      await sendAdminAlert(
-        'CRITICAL: PREPAID Order Failed Shiprocket Sync (Action Required)',
-        `<p>A Prepaid order was <b>successfully paid</b> via Razorpay, but Shiprocket rejected it. 
-         Because it was paid, the order WAS created in the database to record the payment, but <b>Stock was NOT deducted</b>.</p>
-         <p><b>Customer:</b> ${fullName} (${email})</p>
-         <p><b>Razorpay Payment ID:</b> ${razorpay_payment_id}</p>
-         <p><b>Error Details:</b> ${shiprocketError}</p>
-         <p><b>Action:</b> You must manually fulfill or refund this order.</p>`
-      ).catch(err => logger.error(err, 'Email send failed'));
-      // We DO NOT throw an error here. The customer successfully paid. We return 200 OK so the frontend shows success!
-    }
+    };
+    
+    // Fire and forget
+    syncShiprocketBackground(orderNumber, tempOrderId, shiprocketPayload, true, fullName, email, razorpay_payment_id).catch(err => logger.error(err, 'Background sync wrapper failed'));
 
     return res.status(200).json({ message: "Payment verified successfully" });
   } catch (error: any) {
@@ -1179,146 +1209,125 @@ app.post('/api/orders/create-cod', optionalAuthenticateToken, async (req: any, r
 
     const tempOrderId = crypto.randomUUID();
 
-    try {
-      // 1. Sync to Shiprocket FIRST synchronously
-      const shiprocketPayload = {
-         order_id: orderNumber,
-         order_date: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).substring(0, 16),
-         pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || 'Primary',
-         billing_customer_name: fullName,
-         billing_last_name: '',
-         billing_address: street,
-         billing_city: city,
-         billing_pincode: pinCode,
-         billing_state: state,
-         billing_country: 'India',
-         billing_email: email,
-         billing_phone: phone,
-         shipping_is_billing: true,
-         shipping_customer_name: fullName,
-         shipping_last_name: '',
-         shipping_address: street,
-         shipping_city: city,
-         shipping_pincode: pinCode,
-         shipping_state: state,
-         shipping_country: 'India',
-         shipping_email: email,
-         shipping_phone: phone,
-         order_items: validItems.map((i: any) => ({
-            name: "Book",
-            sku: i.bookId,
-            units: i.quantity,
-            selling_price: i.unitPrice
-         })),
-         payment_method: 'COD',
-         shipping_charges: pricing.shippingCharge + pricing.codCharge, // COD orders must pass total additional charges
-         giftwrap_charges: 0,
-         transaction_charges: 0,
-         total_discount: pricing.discount,
-         sub_total: pricing.productSubtotal,
-         length: 10, breadth: 10, height: 10, weight: 0.5
-      };
-      const shiprocketRes = await createShiprocketOrder(shiprocketPayload);
-      logger.info('Shiprocket API Create Order Response: ' + JSON.stringify(shiprocketRes, null, 2));
-
-      if (shiprocketRes.status_code !== 1) {
-         throw new Error(JSON.stringify(shiprocketRes));
-      }
-
-      // 2. If Shiprocket succeeds, strictly create the DB order and deduct stock
-      const order = await prisma.$transaction(async (tx) => {
-        const newOrder = await tx.order.create({
-          data: {
-            id: tempOrderId,
-            orderNumber,
-            fullName,
-            email,
-            phone,
-            street,
-            city,
-            state,
-            pinCode,
-            productSubtotal: pricing.productSubtotal,
-            shippingCharge: pricing.shippingCharge,
-            codCharge: pricing.codCharge,
-            discount: pricing.discount,
-            finalAmount: pricing.finalAmount,
-            paymentMethod: 'COD',
-            paymentStatus: 'PENDING',
-            orderStatus: 'PLACED',
-            status: 'Confirmed',
-            userId: req.user ? req.user.id : null,
-            shiprocketOrderId: shiprocketRes.order_id,
-            shiprocketShipmentId: shiprocketRes.shipment_id,
-            shippingSyncStatus: 'CREATED',
-            shiprocketCreatedAt: new Date(),
-            items: {
-              create: validItems.map((item: any) => ({
-                bookId: item.bookId,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice
-              }))
-            }
-          }
-        });
-
-        // Decrease stock atomically
-        for (const item of validItems) {
-          const result = await tx.book.updateMany({
-            where: { id: item.bookId, stock: { gte: item.quantity } },
-            data: { stock: { decrement: item.quantity } }
-          });
-          if (result.count > 0) {
-            const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
-            if (updatedBook) {
-              let newStatus = 'in_stock';
-              if (updatedBook.stock === 0) newStatus = 'out_of_stock';
-              else if (updatedBook.stock <= 5) newStatus = 'low_stock';
-              await tx.book.update({
-                where: { id: item.bookId },
-                data: { stockStatus: newStatus }
-              });
-            }
+    // 1. Create DB Order IMMEDIATELY
+    const order = await prisma.$transaction(async (tx) => {
+      const newOrder = await tx.order.create({
+        data: {
+          id: tempOrderId,
+          orderNumber,
+          fullName,
+          email,
+          phone,
+          street,
+          city,
+          state,
+          pinCode,
+          productSubtotal: pricing.productSubtotal,
+          shippingCharge: pricing.shippingCharge,
+          codCharge: pricing.codCharge,
+          discount: pricing.discount,
+          finalAmount: pricing.finalAmount,
+          paymentMethod: 'COD',
+          paymentStatus: 'PENDING',
+          orderStatus: 'PLACED',
+          status: 'Confirmed',
+          userId: req.user ? req.user.id : null,
+          shippingSyncStatus: 'PENDING',
+          items: {
+            create: validItems.map((item: any) => ({
+              bookId: item.bookId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice
+            }))
           }
         }
-        return newOrder;
       });
 
-      const finalOrder = await prisma.order.findUnique({
-        where: { id: order.id },
-        include: { items: { include: { book: true } } }
-      });
-
-      if (finalOrder) {
-        sendCustomerReceiptEmail(
-          email, fullName, orderNumber,
-          finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
-          pricing.finalAmount,
-          `${street}, ${city}, ${state} - ${pinCode}`
-        ).catch(err => logger.error(err, 'Email send failed'));
-        sendAdminNewOrderEmail('nilansupublication@gmail.com', {
-          orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'COD',
-          subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
-          items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
-        }).catch(err => logger.error(err, 'Email send failed'));
+      // Decrease stock atomically
+      for (const item of validItems) {
+        const result = await tx.book.updateMany({
+          where: { id: item.bookId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } }
+        });
+        if (result.count > 0) {
+          const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
+          if (updatedBook) {
+            let newStatus = 'in_stock';
+            if (updatedBook.stock === 0) newStatus = 'out_of_stock';
+            else if (updatedBook.stock <= 5) newStatus = 'low_stock';
+            await tx.book.update({
+              where: { id: item.bookId },
+              data: { stockStatus: newStatus }
+            });
+          }
+        }
       }
+      return newOrder;
+    });
 
-      res.json({ success: true, orderId: order.orderNumber, orderNumber: order.orderNumber });
-      
-    } catch (e: any) {
-      logger.error(e.message || e, 'Shiprocket sync failed for COD order');
-      
-      await sendAdminAlert(
-        'CRITICAL: COD Order Failed Shiprocket Sync',
-        `<p>A COD order checkout was attempted but Shiprocket rejected it. <b>The order was Rolled Back and stock was NOT deducted.</b></p>
-         <p><b>Customer:</b> ${fullName} (${email})</p>
-         <p><b>Error Details:</b> ${e.message}</p>
-         <p><b>Order Number that was blocked:</b> ${orderNumber}</p>`
+    const finalOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+      include: { items: { include: { book: true } } }
+    });
+
+    if (finalOrder) {
+      sendCustomerReceiptEmail(
+        email, fullName, orderNumber,
+        finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
+        pricing.finalAmount,
+        `${street}, ${city}, ${state} - ${pinCode}`
       ).catch(err => logger.error(err, 'Email send failed'));
-      
-      // Throw explicitly so the outer catch returns a technical error safely
-      throw new Error("Shiprocket Validation Failed");
+      sendAdminNewOrderEmail('nilansupublication@gmail.com', {
+        orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'COD',
+        subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
+        items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
+      }).catch(err => logger.error(err, 'Email send failed'));
     }
+
+    // 2. Trigger Shiprocket Sync Asynchronously in Background
+    const shiprocketPayload = {
+       order_id: orderNumber,
+       order_date: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).substring(0, 16).replace('T', ' '),
+       pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || 'Primary',
+       billing_customer_name: fullName,
+       billing_last_name: '',
+       billing_address: street,
+       billing_city: city,
+       billing_pincode: pinCode,
+       billing_state: state,
+       billing_country: 'India',
+       billing_email: email,
+       billing_phone: phone,
+       shipping_is_billing: true,
+       shipping_customer_name: fullName,
+       shipping_last_name: '',
+       shipping_address: street,
+       shipping_city: city,
+       shipping_pincode: pinCode,
+       shipping_state: state,
+       shipping_country: 'India',
+       shipping_email: email,
+       shipping_phone: phone,
+       order_items: validItems.map((i: any) => ({
+          name: "Book",
+          sku: i.bookId,
+          units: i.quantity,
+          selling_price: i.unitPrice
+       })),
+       payment_method: 'COD',
+       shipping_charges: pricing.shippingCharge + pricing.codCharge, // COD orders must pass total additional charges
+       giftwrap_charges: 0,
+       transaction_charges: 0,
+       total_discount: pricing.discount,
+       sub_total: pricing.productSubtotal,
+       length: 10, breadth: 10, height: 10, weight: 0.5
+    };
+    
+    // Fire and forget
+    syncShiprocketBackground(orderNumber, tempOrderId, shiprocketPayload, false, fullName, email).catch(err => logger.error(err, 'Background sync wrapper failed'));
+
+    // 3. Send Instant Response to Client
+    return res.json({ success: true, orderId: order.orderNumber, orderNumber: order.orderNumber });
 
   } catch (error: any) {
     logger.error(error.message || error, 'Create COD Error');
