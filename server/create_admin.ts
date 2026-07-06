@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  const email = 'aritradatt39@gmail.com '; // You can change this
+  const email = 'aritradatt39@gmail.com'; // You can change this
   const password = 'Aritradutta@2005'; // You can change this
 
   console.log(`Checking if admin user exists (${email})...`);

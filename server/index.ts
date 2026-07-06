@@ -79,6 +79,7 @@ export const clearCache = async (prefix?: string) => {
 
 
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy (Nginx) for correct IP rate limiting
 const server = http.createServer(app);
 
 const ALLOWED_ORIGINS = [

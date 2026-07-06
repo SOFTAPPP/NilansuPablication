@@ -841,6 +841,7 @@ function CategoryForm({ category, onCancel, onSave }: any) {
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(category?.image_path || null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { showToast } = useToast();
 
   // Auto-generate slug
@@ -852,6 +853,8 @@ function CategoryForm({ category, onCancel, onSave }: any) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     const data = new FormData();
     Object.entries(formData).forEach(([key, value]) => {
@@ -881,6 +884,8 @@ function CategoryForm({ category, onCancel, onSave }: any) {
     } catch (e) {
       console.error(e);
       showToast('Error saving category', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -939,8 +944,17 @@ function CategoryForm({ category, onCancel, onSave }: any) {
       </div>
 
       <div className="pt-6 mt-6 border-t border-divider flex justify-end gap-3">
-        <button type="button" onClick={onCancel} className="btn-secondary px-6">Cancel</button>
-        <button type="submit" className="btn-primary px-8 shadow-md">Save Category</button>
+        <button type="button" onClick={onCancel} disabled={isSubmitting} className="btn-secondary px-6 disabled:opacity-50">Cancel</button>
+        <button type="submit" disabled={isSubmitting} className="btn-primary px-8 shadow-md flex items-center gap-2 disabled:opacity-80">
+          {isSubmitting ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Saving...
+            </>
+          ) : (
+            'Save Category'
+          )}
+        </button>
       </div>
     </form>
   );
@@ -1143,7 +1157,16 @@ function UserForm({ user, onSave, onCancel }: { user: any, onSave: () => void, o
 
         <div className="pt-6 border-t border-divider flex justify-end gap-3">
           <button type="button" onClick={onCancel} disabled={loading} className="btn-secondary px-6">Cancel</button>
-          <button type="submit" disabled={loading} className="btn-primary px-8 shadow-md disabled:opacity-50">{loading ? 'Saving...' : 'Save User'}</button>
+          <button type="submit" disabled={loading} className="btn-primary px-8 shadow-md flex items-center gap-2 disabled:opacity-50">
+            {loading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Save User'
+            )}
+          </button>
         </div>
       </div>
     </form>
