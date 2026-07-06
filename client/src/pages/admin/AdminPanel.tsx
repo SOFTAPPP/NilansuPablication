@@ -6,7 +6,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useDialog } from '../../context/DialogContext';
 import { useToast } from '../../context/ToastContext';
 import { api } from '../../utils/api';
-
 function slugify(text: string) {
   return text.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '');
 }
