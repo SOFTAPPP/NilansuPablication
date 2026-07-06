@@ -21,11 +21,16 @@ export function DialogProvider({ children }: { children: ReactNode }) {
 
   const confirm = useCallback((options: DialogOptions | string) => {
     return new Promise<boolean>((resolve) => {
-      if (typeof options === 'string') {
-        setDialog({ message: options, resolve, type: 'warning' });
-      } else {
-        setDialog({ ...options, resolve });
-      }
+      setDialog(prev => {
+        // Resolve the previous dialog with false if another confirm() is called
+        if (prev) {
+          prev.resolve(false);
+        }
+        if (typeof options === 'string') {
+          return { message: options, resolve, type: 'warning' as const };
+        }
+        return { ...options, resolve };
+      });
     });
   }, []);
 

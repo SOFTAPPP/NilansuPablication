@@ -11,7 +11,9 @@ export default function AllCategories() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    isLoading
+    isLoading,
+    isError,
+    error
   } = useInfiniteQuery({
     queryKey: ['categories'],
     queryFn: ({ pageParam = 0 }) => api.getCategories({ cursor: pageParam }),
@@ -19,7 +21,6 @@ export default function AllCategories() {
     initialPageParam: 0
   });
 
-  // Background prefetch
   useEffect(() => {
     if (categoriesData?.pages.length === 1 && hasNextPage) {
       fetchNextPage();
@@ -50,10 +51,15 @@ export default function AllCategories() {
         <div className="flex justify-center py-20">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent"></div>
         </div>
+      ) : isError ? (
+        <div className="text-center py-20">
+          <p className="text-danger font-medium">Failed to load categories.</p>
+          <p className="text-textSecondary text-sm mt-2">{(error as Error)?.message || 'Please try again later.'}</p>
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 max-w-[1400px] mx-auto">
-            {categories.map((cat, index) => (
+            {categories.map((cat) => (
               <CategoryCard key={cat.id} cat={cat} />
             ))}
             {isFetchingNextPage && Array(6).fill(0).map((_, i) => (
@@ -68,18 +74,21 @@ export default function AllCategories() {
 }
 
 function CategoryCard({ cat }: { cat: any }) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <Link 
       to={`/category/${cat.slug}`}
       className="group bg-surface border border-divider shadow-sm rounded-xl hover:border-primary/50 hover:shadow-lg transition-all flex flex-col overflow-hidden"
     >
-      {cat.image_path ? (
+      {cat.image_path && !imgError ? (
         <div className="relative w-full aspect-[3/4] overflow-hidden flex-shrink-0 bg-muted">
           <img 
             src={cat.image_path} 
             alt={cat.name} 
             className="w-full h-full object-cover group-hover:scale-105 transition-all duration-500"
             loading="lazy"
+            onError={() => setImgError(true)}
           />
         </div>
       ) : (

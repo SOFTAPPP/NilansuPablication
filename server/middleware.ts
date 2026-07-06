@@ -1,7 +1,13 @@
 import jwt from 'jsonwebtoken';
 import { requestContext } from './utils/logger';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_12345';
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set in production environment');
+  }
+  console.warn('\x1b[33m⚠ WARNING: JWT_SECRET not set. Using insecure fallback for development ONLY.\x1b[0m');
+}
+export const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_12345_development_only';
 
 export const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../utils/api';
+import logo from '../logo/logo.png';
 
 export default function Signup() {
   const [name, setName] = useState('');
@@ -37,15 +38,15 @@ export default function Signup() {
   return (
     <div className="container mx-auto px-4 py-16 flex justify-center items-center">
       <div className="bg-surface border border-divider rounded-xl p-8 max-w-md w-full shadow-lg">
-        <div className="flex flex-col items-center mb-8">
-          <div className="bg-primary/10 p-3 rounded-full text-primary mb-4">
-            <BookOpen size={32} />
+        <div className="flex flex-col items-center mb-4">
+          <div className="flex justify-center -mb-8 relative z-0">
+            <img src={logo} alt="Nilansu Logo" className="h-48 w-auto object-contain scale-110" />
           </div>
-          <h1 className="text-2xl font-bold text-textPrimary">Create Account</h1>
+          <h1 className="text-2xl font-bold text-textPrimary relative z-10">Create Account</h1>
           <p className="text-textSecondary text-sm mt-1">Join Nilansu Publication</p>
         </div>
 
-        <div className="min-h-[60px] mb-6">
+        <div className="min-h-[40px] mb-4">
           {error && (
             <div className="bg-danger/10 text-danger p-3 rounded-lg text-sm border border-danger/20 animate-fade-in">
               {error}

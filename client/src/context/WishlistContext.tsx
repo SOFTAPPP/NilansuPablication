@@ -1,45 +1,95 @@
-import React, { createContext, useReducer, useEffect, useContext } from 'react';
+import React, { createContext, useReducer, useEffect, useContext, useCallback, useMemo } from 'react';
 
-const WishlistContext = createContext<any>(undefined);
+interface WishlistBook {
+  id: string;
+  title: string;
+  author?: string;
+  coverImage?: string;
+  price: number;
+  slug?: string;
+}
 
-const initialState = {
-  items: JSON.parse(localStorage.getItem('wishlistItems')) || [],
+interface WishlistState {
+  items: WishlistBook[];
+}
+
+type WishlistAction =
+  | { type: 'TOGGLE_WISHLIST'; payload: WishlistBook }
+  | { type: 'REMOVE_FROM_WISHLIST'; payload: { id: string } };
+
+interface WishlistContextType {
+  state: WishlistState;
+  dispatch: React.Dispatch<WishlistAction>;
+  isInWishlist: (bookId: string) => boolean;
+}
+
+const WishlistContext = createContext<WishlistContextType | undefined>(undefined);
+
+function safelyLoadWishlistItems(): WishlistBook[] {
+  try {
+    const raw = localStorage.getItem('wishlistItems');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch {
+    localStorage.removeItem('wishlistItems');
+    return [];
+  }
+}
+
+const initialState: WishlistState = {
+  items: safelyLoadWishlistItems(),
 };
 
-function wishlistReducer(state, action) {
-  let newItems;
+function wishlistReducer(state: WishlistState, action: WishlistAction): WishlistState {
   switch (action.type) {
-    case 'TOGGLE_WISHLIST':
+    case 'TOGGLE_WISHLIST': {
       const exists = state.items.find(item => item.id === action.payload.id);
       if (exists) {
-        newItems = state.items.filter(item => item.id !== action.payload.id);
-      } else {
-        newItems = [...state.items, action.payload];
+        return { items: state.items.filter(item => item.id !== action.payload.id) };
       }
-      break;
+      return { items: [...state.items, action.payload] };
+    }
     case 'REMOVE_FROM_WISHLIST':
-      newItems = state.items.filter(item => item.id !== action.payload.id);
-      break;
+      return { items: state.items.filter(item => item.id !== action.payload.id) };
     default:
       return state;
   }
-  
-  localStorage.setItem('wishlistItems', JSON.stringify(newItems));
-  return { items: newItems };
 }
 
-export function WishlistProvider({ children }) {
+export function WishlistProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(wishlistReducer, initialState);
 
-  const isInWishlist = (bookId) => {
-    return state.items.some(item => item.id === bookId);
-  };
+  useEffect(() => {
+    try {
+      localStorage.setItem('wishlistItems', JSON.stringify(state.items));
+    } catch {
+      // Storage quota exceeded or private browsing
+    }
+  }, [state.items]);
+
+  const isInWishlist = useCallback(
+    (bookId: string) => state.items.some(item => item.id === bookId),
+    [state.items]
+  );
+
+  const value = useMemo(
+    () => ({ state, dispatch, isInWishlist }),
+    [state, dispatch, isInWishlist]
+  );
 
   return (
-    <WishlistContext.Provider value={{ state, dispatch, isInWishlist }}>
+    <WishlistContext.Provider value={value}>
       {children}
     </WishlistContext.Provider>
   );
 }
 
-export const useWishlist = () => useContext(WishlistContext);
+export const useWishlist = () => {
+  const context = useContext(WishlistContext);
+  if (context === undefined) {
+    throw new Error('useWishlist must be used within a WishlistProvider');
+  }
+  return context;
+};

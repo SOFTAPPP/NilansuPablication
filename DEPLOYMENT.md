@@ -35,17 +35,17 @@ Inside the PostgreSQL terminal (`postgres=#`), run the following commands:
 
 ```sql
 -- Create the database
-CREATE DATABASE nilansupublication;
+CREATE DATABASE nilansupublications;
 
 -- Update the postgres user password
 ALTER USER postgres WITH ENCRYPTED PASSWORD 'Aritradutta@2005';
 
 -- Grant privileges
-GRANT ALL PRIVILEGES ON DATABASE nilansupublication TO postgres;
-ALTER DATABASE nilansupublication OWNER TO postgres;
+GRANT ALL PRIVILEGES ON DATABASE nilansupublications TO postgres;
+ALTER DATABASE nilansupublications OWNER TO postgres;
 
 -- Connect to the new database to create the required extension
-\c nilansupublication
+\c nilansupublications
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- Exit psql
@@ -82,9 +82,62 @@ Crucially, set your `DATABASE_URL` matching the user and password you created ab
 
 ```bash
 # Example: postgresql://USER:PASSWORD@HOST:PORT/DATABASE?schema=public
-DATABASE_URL="postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublication?schema=public"
-JWT_SECRET="generate_a_very_secure_random_string"
+DATABASE_URL="postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublications?schema=public&connection_limit=20&pool_timeout=2"
+JWT_SECRET="generate_a_very_secure_random_string_64_chars_minimum"
 NODE_ENV="production"
+FRONTEND_URL="https://nilansupublication.com"
+PORT=5002
+```
+
+> **Important**: `FRONTEND_URL` must match your production domain exactly for CORS to work. For local development it defaults to `http://localhost:5173`.
+
+### Nginx Configuration for Production
+
+Add this to your Nginx config to serve uploaded images and proxy API calls:
+
+```nginx
+# Serve uploaded images directly via Nginx (cached, efficient)
+location /uploaded_books/ {
+    alias /path/to/nilansu-publication/uploaded_books/;
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+location /uploaded_categories/ {
+    alias /path/to/nilansu-publication/uploaded_categories/;
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# Proxy API calls to the Node.js backend
+location /api/ {
+    proxy_pass http://localhost:5002;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_cache_bypass $http_upgrade;
+}
+
+# Socket.IO support
+location /socket.io/ {
+    proxy_pass http://localhost:5002;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+}
+```
+
+### Required Database Extension
+
+After database setup, ensure the `pg_trgm` extension is installed for efficient search:
+
+```bash
+sudo -u postgres psql -d nilansupublications -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 ```
 
 ## 5. Migrations & Seeding (Production)
@@ -159,11 +212,11 @@ Production databases must be backed up regularly.
 **To Create a Backup:**
 ```bash
 # Dumps the entire database into a backup.sql file
-pg_dump "postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublication?schema=public" > backup.sql
+pg_dump "postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublications?schema=public" > backup.sql
 ```
 
 **To Restore a Backup:**
 ```bash
 # Restores the backup.sql file into the database
-psql "postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublication?schema=public" < backup.sql
+psql "postgresql://postgres:Aritradutta%402005@localhost:5432/nilansupublications?schema=public" < backup.sql
 ```

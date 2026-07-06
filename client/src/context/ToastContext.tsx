@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertCircle, CheckCircle, Info, X } from 'lucide-react';
 
@@ -18,19 +18,34 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const showToast = useCallback((message: string, type: ToastType = 'info') => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setToasts(prev => [...prev, { id, message, type }]);
-
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 4000);
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(timer => clearTimeout(timer));
+      timersRef.current.clear();
+    };
   }, []);
 
-  const removeToast = (id: string) => {
+  const showToast = useCallback((message: string, type: ToastType = 'info') => {
+    const id = Math.random().toString(36).substring(2, 11);
+    setToasts(prev => [...prev, { id, message, type }]);
+
+    const timer = setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+      timersRef.current.delete(id);
+    }, 4000);
+    timersRef.current.set(id, timer);
+  }, []);
+
+  const removeToast = useCallback((id: string) => {
+    const existingTimer = timersRef.current.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      timersRef.current.delete(id);
+    }
     setToasts(prev => prev.filter(t => t.id !== id));
-  };
+  }, []);
 
   return (
     <ToastContext.Provider value={{ showToast }}>

@@ -89,14 +89,14 @@ export default function Profile() {
                           <p className="font-bold text-textPrimary">Order #{order.orderNumber}</p>
                           <p className="text-sm text-textSecondary flex items-center gap-1 mt-1">
                             <Calendar size={14} />
-                            {new Date(order.createdAt).toLocaleDateString()}
+                            {order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'N/A'}
                             <span className="mx-2">•</span>
                             <Clock size={14} />
-                            {new Date(order.createdAt).toLocaleTimeString()}
+                            {order.createdAt ? new Date(order.createdAt).toLocaleTimeString() : 'N/A'}
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-bold text-primary">₹{order.finalAmount || order.total}</p>
+                          <p className="font-bold text-primary">₹{order.finalAmount || order.total || 0}</p>
                           <div className="mt-1 flex flex-col items-end gap-1">
                             {order.paymentMethod === 'COD' ? (
                               <span className="bg-orange-500/10 text-orange-500 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">COD</span>
@@ -130,7 +130,7 @@ export default function Profile() {
                               <div className="flex items-center gap-3">
                                 {item.book?.coverImage ? (
                                   <img 
-                                    src={item.book.coverImage.includes('uploaded_books') ? `${item.book.coverImage}?w=100` : item.book.coverImage} 
+                                    src={item.book.coverImage?.includes('uploaded_books') ? `${item.book.coverImage}?w=100` : item.book.coverImage} 
                                     alt={item.book.title} 
                                     className="w-10 h-14 object-cover rounded shadow-sm"
                                   />
@@ -141,7 +141,7 @@ export default function Profile() {
                                 )}
                                 <span className="font-medium text-textPrimary">{item.quantity}x {item.book?.title || 'Unknown Book'}</span>
                               </div>
-                              <span className="font-bold text-textPrimary">₹{item.unitPrice * item.quantity}</span>
+                              <span className="font-bold text-textPrimary">₹{(item.unitPrice || 0) * (item.quantity || 0)}</span>
                             </div>
                           ))}
                         </div>

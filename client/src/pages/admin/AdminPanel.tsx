@@ -964,7 +964,7 @@ function UsersManager({ onEditingChange }: { onEditingChange?: (isEditing: boole
   const fetchUsers = async () => {
     try {
       const res = await api.getAdminUsers();
-      setUsers(res);
+      setUsers(Array.isArray(res) ? res : (res.data || res));
     } catch (e) {
       console.error(e);
     }
@@ -1167,7 +1167,7 @@ function OrdersManager({ onEditingChange }: { onEditingChange?: (isEditing: bool
   const fetchOrders = async () => {
     try {
       const res = await api.getAdminOrders();
-      setOrders(res);
+      setOrders(Array.isArray(res) ? res : (res.data || res));
     } catch (e: any) {
       console.error(e);
       showToast('Failed to fetch orders', 'error');
@@ -1255,7 +1255,7 @@ function OrdersManager({ onEditingChange }: { onEditingChange?: (isEditing: bool
                       {o.items.map((item: any) => (
                         <div key={item.id} className="flex items-center gap-3 text-xs text-textSecondary">
                           {item.book?.coverImage ? (
-                            <img src={item.book.coverImage.includes('uploaded_books') ? `${item.book.coverImage}?w=50` : item.book.coverImage} alt={item.book.title} className="w-8 h-10 object-cover rounded shadow-sm border border-divider flex-shrink-0" />
+                            <img src={item.book.coverImage?.includes('uploaded_books') ? `${item.book.coverImage}?w=50` : item.book.coverImage} alt={item.book.title} className="w-8 h-10 object-cover rounded shadow-sm border border-divider flex-shrink-0" />
                           ) : (
                             <div className="w-8 h-10 bg-muted rounded border border-divider flex items-center justify-center flex-shrink-0">
                               <BookOpen size={14} className="text-textSecondary/50" />

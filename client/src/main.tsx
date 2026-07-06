@@ -10,7 +10,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 0, // 0 minutes (always fetch fresh)
+      staleTime: 0, // Always fetch fresh to ensure real-time UI updates (backend Redis handles caching)
       gcTime: 10 * 60 * 1000, // 10 minutes
       refetchOnWindowFocus: false,
       retry: 1,

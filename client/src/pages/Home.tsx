@@ -154,13 +154,26 @@ const slides = [
 
 function HeroSlider() {
   const [current, setCurrent] = useState(0);
+  const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
+  const startTimer = React.useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
       setCurrent((prev) => (prev === slides.length - 1 ? 0 : prev + 1));
     }, 5000);
-    return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    startTimer();
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [startTimer]);
+
+  const goToSlide = (idx: number) => {
+    setCurrent(idx);
+    startTimer();
+  };
 
   return (
     <section className="relative overflow-hidden h-[400px] md:h-[500px]">
@@ -203,7 +216,7 @@ function HeroSlider() {
         {slides.map((_, idx) => (
           <button
             key={idx}
-            onClick={() => setCurrent(idx)}
+            onClick={() => goToSlide(idx)}
             className={`w-3 h-3 rounded-full transition-colors ${current === idx ? 'bg-primary' : 'bg-primary/20 hover:bg-primary/50'}`}
             aria-label={`Go to slide ${idx + 1}`}
           />

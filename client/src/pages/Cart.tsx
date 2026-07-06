@@ -26,7 +26,7 @@ export default function Cart() {
   const moveToWishlist = (item) => {
     wishlistDispatch({ 
       type: 'TOGGLE_WISHLIST', 
-      payload: { id: item.bookId, title: item.title, author: item.author, coverImage: item.coverImage, price: item.unitPrice } 
+      payload: { id: item.bookId, title: item.title, author: item.author || '', coverImage: item.coverImage || '', price: item.unitPrice || 0 } 
     });
     removeItem(item.bookId);
   };
@@ -55,7 +55,11 @@ export default function Cart() {
           {items.map(item => (
             <div key={item.bookId} className="bg-surface border border-divider rounded-2xl p-4 flex gap-4 shadow-sm relative">
               <Link to={`/book/${item.bookId}`} className="w-24 shrink-0 aspect-[3/4] bg-muted rounded-lg overflow-hidden">
-                <img src={item.coverImage?.includes('uploaded_books') ? `${item.coverImage}?w=200` : item.coverImage} alt={item.title} className="w-full h-full object-cover" />
+                {item.coverImage ? (
+                  <img src={item.coverImage?.includes('uploaded_books') ? `${item.coverImage}?w=200` : item.coverImage} alt={item.title} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-xs text-textSecondary">No image</div>
+                )}
               </Link>
               
               <div className="flex-1 flex flex-col justify-between py-1">
@@ -95,8 +99,8 @@ export default function Cart() {
                   </div>
                   
                   <div className="text-right">
-                    <div className="font-bold text-lg">₹{item.unitPrice * item.quantity}</div>
-                    {item.quantity > 1 && <div className="text-xs text-textSecondary">₹{item.unitPrice} each</div>}
+                    <div className="font-bold text-lg">₹{(item.unitPrice || 0) * (item.quantity || 0)}</div>
+                    {item.quantity > 1 && <div className="text-xs text-textSecondary">₹{item.unitPrice || 0} each</div>}
                   </div>
                 </div>
               </div>

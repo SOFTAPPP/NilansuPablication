@@ -24,26 +24,24 @@ import Razorpay from 'razorpay';
 import { calculateOrderTotal } from './utils/pricing';
 import { createShiprocketOrder, trackShipment } from './services/shiprocket';
 import { sendAdminAlert, sendCustomerReceiptEmail, sendAdminNewOrderEmail, sendSupportEmail } from './utils/email';
-const isProduction = process.env.NODE_ENV === 'production';
 
-export const adminSessions = new Map<string, string>();
+
+const isProduction = process.env.NODE_ENV === 'production';
 
 export const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : new (RedisMock as any)();
 
+const CACHE_PREFIX = 'cache:';
+
 export const cacheMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (req.method !== 'GET') return next();
-  const key = req.originalUrl;
-  
-  let hasSentCachedResponse = false;
+
+  const key = CACHE_PREFIX + req.originalUrl;
   
   try {
     const cachedResponse = await redis.get(key);
     if (cachedResponse) {
       const data = JSON.parse(cachedResponse);
-      // Serve stale cache instantly
-      res.json(data);
-      hasSentCachedResponse = true;
-      // Do not return here. Proceed to revalidate in background (SWR)
+      return res.json(data);
     }
   } catch (err) {
     logger.error(err, 'Redis error');
@@ -55,12 +53,8 @@ export const cacheMiddleware = async (req: express.Request, res: express.Respons
       redis.set(key, JSON.stringify(body), 'EX', 300);
     } catch (err) {}
     
-    // Only send the response to the client if we didn't already send the stale cache
-    if (!hasSentCachedResponse) {
-      res.json = originalJson;
-      return res.json(body);
-    }
-    return this as any;
+    res.json = originalJson;
+    return res.json(body);
   };
   
   next();
@@ -69,10 +63,13 @@ export const cacheMiddleware = async (req: express.Request, res: express.Respons
 export const clearCache = async (prefix?: string) => {
   try {
     if (!prefix) {
-      await redis.flushall();
+      const keys = await redis.keys(`${CACHE_PREFIX}*`);
+      if (keys.length > 0) {
+        await redis.del(...keys);
+      }
       return;
     }
-    const keys = await redis.keys(`*${prefix}*`);
+    const keys = await redis.keys(`${CACHE_PREFIX}*${prefix}*`);
     if (keys.length > 0) {
       await redis.del(...keys);
     }
@@ -83,8 +80,17 @@ export const clearCache = async (prefix?: string) => {
 
 const app = express();
 const server = http.createServer(app);
+
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:4173',
+  process.env.FRONTEND_URL || '',
+].filter(Boolean);
+
 export const io = new Server(server, {
-  cors: { origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'], credentials: true }
+  cors: { origin: ALLOWED_ORIGINS, credentials: true }
 });
 
 const prisma = new PrismaClient({
@@ -116,7 +122,13 @@ export const razorpay = new Razorpay({
   key_secret: RAZORPAY_KEY_SECRET || '',
 });
 
-// Default accounts are no longer auto-initialized on startup
+const reviewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many reviews submitted. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 // Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
@@ -150,7 +162,7 @@ const loggerMiddleware = (req: express.Request, res: express.Response, next: exp
 };
 
 app.use(loggerMiddleware); // Custom centralized logging
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'], credentials: true }));
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 
 // Razorpay Webhook route needs raw body parser
 app.post("/api/payment/webhook", express.raw({ type: "application/json" }), async (req, res) => {
@@ -246,6 +258,16 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+// Global Cache-Control for all dynamic API routes
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50, // Increased to 50 to prevent blocking multiple legitimate users on same IP during spikes
@@ -268,7 +290,9 @@ const handleImageRequest = async (folder: string, req: express.Request, res: exp
   const baseDir = folder === 'uploaded_categories' ? categoriesUploadDir : booksUploadDir;
   const originalPath = path.join(baseDir, filename);
   
-  if (!fs.existsSync(originalPath)) {
+  try {
+    await fs.promises.access(originalPath);
+  } catch {
     return res.status(404).send('Not found');
   }
 
@@ -277,16 +301,18 @@ const handleImageRequest = async (folder: string, req: express.Request, res: exp
   }
 
   const width = parseInt(widthStr, 10);
-  if (isNaN(width) || width <= 0) {
+  const ALLOWED_WIDTHS = [50, 100, 150, 200, 300, 400, 600, 800, 1200];
+  if (isNaN(width) || width <= 0 || !ALLOWED_WIDTHS.includes(width)) {
     return res.sendFile(originalPath, { maxAge: '1y', immutable: true });
   }
 
   const resizedFilename = `${path.basename(filename, path.extname(filename))}_w${width}${path.extname(filename)}`;
   const resizedPath = path.join(baseDir, resizedFilename);
 
-  if (fs.existsSync(resizedPath)) {
+  try {
+    await fs.promises.access(resizedPath);
     return res.sendFile(resizedPath, { maxAge: '1y', immutable: true });
-  }
+  } catch {}
 
   try {
     await sharp(originalPath)
@@ -315,7 +341,17 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error('Only JPEG, PNG, WebP, AVIF, and GIF images are allowed'));
+    }
+    cb(null, true);
+  }
+});
 
 const processImageUpload = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (!req.file) return next();
@@ -365,16 +401,7 @@ app.get('/ready', async (req, res) => {
   }
 });
 
-app.use((req, res, next) => {
-  if (req.method === 'GET') {
-    if (req.path.startsWith('/api/books') || req.path.startsWith('/api/categories')) {
-      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
-    } else if (req.path.startsWith('/api/auth') || req.path.startsWith('/api/admin') || req.path.startsWith('/api/users')) {
-      res.setHeader('Cache-Control', 'private, no-store');
-    }
-  }
-  next();
-});
+// Removed overriding Cache-Control middleware to respect the global no-store header
 
 // Auth: Register
 app.post('/api/auth/register', async (req, res) => {
@@ -415,7 +442,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     let adminUrl = undefined;
     if (user.role === 'ADMIN') {
       const adminToken = crypto.randomBytes(24).toString('base64url');
-      adminSessions.set(user.id, adminToken);
+      await redis.set(`admin_session:${user.id}`, adminToken, 'EX', 12 * 60 * 60);
       adminUrl = `/panel/${adminToken}`;
     }
     
@@ -427,9 +454,9 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 });
 
 // Auth: Logout
-app.post('/api/auth/logout', authenticateToken, (req: any, res) => {
+app.post('/api/auth/logout', authenticateToken, async (req: any, res) => {
   if (req.user) {
-    adminSessions.delete(req.user.id);
+    await redis.del(`admin_session:${req.user.id}`);
   }
   res.clearCookie('token');
   res.json({ success: true });
@@ -461,10 +488,10 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
     
     let adminUrl = undefined;
     if (user.role === 'ADMIN') {
-      let token = adminSessions.get(user.id);
+      let token = await redis.get(`admin_session:${user.id}`);
       if (!token) {
         token = crypto.randomBytes(24).toString('base64url');
-        adminSessions.set(user.id, token);
+        await redis.set(`admin_session:${user.id}`, token, 'EX', 12 * 60 * 60);
       }
       adminUrl = `/panel/${token}`;
     }
@@ -476,9 +503,9 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
 });
 
 // Admin: Validate Token
-app.get('/api/admin/validate-token/:token', authenticateToken, isAdmin, (req: any, res) => {
+app.get('/api/admin/validate-token/:token', authenticateToken, isAdmin, async (req: any, res) => {
   const token = req.params.token;
-  const storedToken = adminSessions.get(req.user.id);
+  const storedToken = await redis.get(`admin_session:${req.user.id}`);
   if (storedToken && storedToken === token) {
     res.json({ valid: true });
   } else {
@@ -728,9 +755,20 @@ app.get('/api/books/trending', cacheMiddleware, async (req, res) => {
     const books = await prisma.book.findMany({
       where: { isTrending: true },
       take: 10,
-      include: { 
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        author: true,
+        coverImage: true,
+        price: true,
+        oldPrice: true,
+        isOnSale: true,
+        rating: true,
+        reviewCount: true,
+        isTrending: true,
         category: {
-          select: { name: true } // Performance: Select minimal fields to avoid N+1 bloat
+          select: { name: true }
         },
         publications: {
           select: { name: true }
@@ -787,7 +825,7 @@ app.get('/api/books/:id/reviews', cacheMiddleware, async (req, res) => {
 });
 
 // Submit a Review
-app.post('/api/books/:id/reviews', async (req, res) => {
+app.post('/api/books/:id/reviews', reviewLimiter, async (req, res) => {
   try {
     const bookId = String(req.params.id);
     const { reviewerName, rating, title, comment } = req.body;
@@ -1050,16 +1088,21 @@ app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res)
       // ONLY decrease stock if shiprocket succeeded
       if (!shiprocketFailed) {
         for (const item of validItems) {
-          const book = await tx.book.findUnique({ where: { id: item.bookId } });
-          if (book) {
-            const newStock = book.stock - item.quantity;
-            let newStatus = 'in_stock';
-            if (newStock === 0) newStatus = 'out_of_stock';
-            else if (newStock <= 5) newStatus = 'low_stock';
-            await tx.book.update({
-              where: { id: item.bookId },
-              data: { stock: newStock, stockStatus: newStatus }
-            });
+          const result = await tx.book.updateMany({
+            where: { id: item.bookId, stock: { gte: item.quantity } },
+            data: { stock: { decrement: item.quantity } }
+          });
+          if (result.count > 0) {
+            const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
+            if (updatedBook) {
+              let newStatus = 'in_stock';
+              if (updatedBook.stock === 0) newStatus = 'out_of_stock';
+              else if (updatedBook.stock <= 5) newStatus = 'low_stock';
+              await tx.book.update({
+                where: { id: item.bookId },
+                data: { stockStatus: newStatus }
+              });
+            }
           }
         }
       }
@@ -1077,12 +1120,12 @@ app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res)
           finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
           pricing.finalAmount,
           `${street}, ${city}, ${state} - ${pinCode}`
-        );
+        ).catch(err => logger.error(err, 'Email send failed'));
         sendAdminNewOrderEmail('nilansupublication@gmail.com', {
           orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'PREPAID',
           subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
           items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
-        });
+        }).catch(err => logger.error(err, 'Email send failed'));
     }
 
     if (shiprocketFailed) {
@@ -1094,7 +1137,7 @@ app.post("/api/payment/verify", optionalAuthenticateToken, async (req: any, res)
          <p><b>Razorpay Payment ID:</b> ${razorpay_payment_id}</p>
          <p><b>Error Details:</b> ${shiprocketError}</p>
          <p><b>Action:</b> You must manually fulfill or refund this order.</p>`
-      );
+      ).catch(err => logger.error(err, 'Email send failed'));
       // We DO NOT throw an error here. The customer successfully paid. We return 200 OK so the frontend shows success!
     }
 
@@ -1221,17 +1264,21 @@ app.post('/api/orders/create-cod', optionalAuthenticateToken, async (req: any, r
 
         // Decrease stock atomically
         for (const item of validItems) {
-          const book = await tx.book.findUnique({ where: { id: item.bookId } });
-          if (book) {
-            const newStock = book.stock - item.quantity;
-            let newStatus = 'in_stock';
-            if (newStock === 0) newStatus = 'out_of_stock';
-            else if (newStock <= 5) newStatus = 'low_stock';
-            
-            await tx.book.update({
-              where: { id: item.bookId },
-              data: { stock: newStock, stockStatus: newStatus }
-            });
+          const result = await tx.book.updateMany({
+            where: { id: item.bookId, stock: { gte: item.quantity } },
+            data: { stock: { decrement: item.quantity } }
+          });
+          if (result.count > 0) {
+            const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
+            if (updatedBook) {
+              let newStatus = 'in_stock';
+              if (updatedBook.stock === 0) newStatus = 'out_of_stock';
+              else if (updatedBook.stock <= 5) newStatus = 'low_stock';
+              await tx.book.update({
+                where: { id: item.bookId },
+                data: { stockStatus: newStatus }
+              });
+            }
           }
         }
         return newOrder;
@@ -1248,12 +1295,12 @@ app.post('/api/orders/create-cod', optionalAuthenticateToken, async (req: any, r
           finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
           pricing.finalAmount,
           `${street}, ${city}, ${state} - ${pinCode}`
-        );
+        ).catch(err => logger.error(err, 'Email send failed'));
         sendAdminNewOrderEmail('nilansupublication@gmail.com', {
           orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'COD',
           subtotal: pricing.productSubtotal, shippingCharge: pricing.shippingCharge, codCharge: pricing.codCharge, discount: pricing.discount, finalAmount: pricing.finalAmount,
           items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
-        });
+        }).catch(err => logger.error(err, 'Email send failed'));
       }
 
       res.json({ success: true, orderId: order.orderNumber, orderNumber: order.orderNumber });
@@ -1267,7 +1314,7 @@ app.post('/api/orders/create-cod', optionalAuthenticateToken, async (req: any, r
          <p><b>Customer:</b> ${fullName} (${email})</p>
          <p><b>Error Details:</b> ${e.message}</p>
          <p><b>Order Number that was blocked:</b> ${orderNumber}</p>`
-      );
+      ).catch(err => logger.error(err, 'Email send failed'));
       
       // Throw explicitly so the outer catch returns a technical error safely
       throw new Error("Shiprocket Validation Failed");
@@ -1327,22 +1374,23 @@ app.post('/api/orders', optionalAuthenticateToken, async (req: any, res) => {
         }
       });
 
-      // Decrease stock and update stockStatus for each item
+      // Decrease stock atomically
       for (const item of items) {
-        const book = await tx.book.findUnique({ where: { id: item.bookId } });
-        if (book) {
-          const newStock = book.stock - item.quantity;
-          let newStatus = 'in_stock';
-          if (newStock === 0) newStatus = 'out_of_stock';
-          else if (newStock <= 5) newStatus = 'low_stock';
-          
-          await tx.book.update({
-            where: { id: item.bookId },
-            data: {
-              stock: newStock,
-              stockStatus: newStatus
-            }
-          });
+        const result = await tx.book.updateMany({
+          where: { id: item.bookId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } }
+        });
+        if (result.count > 0) {
+          const updatedBook = await tx.book.findUnique({ select: { stock: true }, where: { id: item.bookId } });
+          if (updatedBook) {
+            let newStatus = 'in_stock';
+            if (updatedBook.stock === 0) newStatus = 'out_of_stock';
+            else if (updatedBook.stock <= 5) newStatus = 'low_stock';
+            await tx.book.update({
+              where: { id: item.bookId },
+              data: { stockStatus: newStatus }
+            });
+          }
         }
       }
 
@@ -1362,12 +1410,12 @@ app.post('/api/orders', optionalAuthenticateToken, async (req: any, res) => {
           finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice, coverImage: i.book.coverImage || undefined })),
           total,
           `${street}, ${city}, ${state} - ${pinCode}`
-        );
+        ).catch(err => logger.error(err, 'Email send failed'));
         sendAdminNewOrderEmail('nilansupublication@gmail.com', {
           orderNumber, customerName: fullName, email, phone, address: `${street}, ${city}, ${state} - ${pinCode}`, paymentMethod: 'UNKNOWN',
           subtotal: subtotal, shippingCharge: deliveryFee, codCharge: 0, discount: discount, finalAmount: total,
           items: finalOrder.items.map(i => ({ name: i.book.title, quantity: i.quantity, unitPrice: i.unitPrice }))
-        });
+        }).catch(err => logger.error(err, 'Email send failed'));
       }
 
     res.json({ success: true, orderId: order.orderNumber });
@@ -1381,7 +1429,7 @@ app.post('/api/orders', optionalAuthenticateToken, async (req: any, res) => {
 });
 
 // Admin: Add Book
-app.post('/api/admin/books', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+app.post('/api/admin/books', authenticateToken, isAdmin, upload.single('image'), processImageUpload, async (req, res) => {
   try {
     const data = req.body;
     
@@ -1410,7 +1458,7 @@ app.post('/api/admin/books', authenticateToken, isAdmin, upload.single('image'),
       return res.status(400).json({ error: 'At least one publication must be selected.' });
     }
 
-    const coverImage = req.file ? `http://localhost:${PORT}/uploaded_books/${req.file.filename}` : data.coverImage;
+    const coverImage = req.file ? `/uploaded_books/${req.file.filename}` : data.coverImage;
 
     // Ensure slug is unique
     let finalSlug = data.slug;
@@ -1458,7 +1506,7 @@ app.post('/api/admin/books', authenticateToken, isAdmin, upload.single('image'),
 });
 
 // Admin: Update Book
-app.put('/api/admin/books/:id', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+app.put('/api/admin/books/:id', authenticateToken, isAdmin, upload.single('image'), processImageUpload, async (req, res) => {
   try {
     const bookId = String(req.params.id);
     const data = req.body;
@@ -1505,7 +1553,7 @@ app.put('/api/admin/books/:id', authenticateToken, isAdmin, upload.single('image
     };
 
     if (req.file) {
-      updateData.coverImage = `http://localhost:${PORT}/uploaded_books/${req.file.filename}`;
+      updateData.coverImage = `/uploaded_books/${req.file.filename}`;
     } else if (data.coverImage) {
       updateData.coverImage = data.coverImage;
     }
@@ -1528,17 +1576,24 @@ app.put('/api/admin/books/:id', authenticateToken, isAdmin, upload.single('image
 });
 
 // Admin: Delete Book
-app.delete('/api/admin/books/:id', async (req, res) => {
+app.delete('/api/admin/books/:id', authenticateToken, isAdmin, async (req, res) => {
   try {
     const bookId = String(req.params.id);
-    // Force delete associated OrderItems to prevent Foreign Key Constraint errors
-    await prisma.orderItem.deleteMany({ where: { bookId: bookId } });
-    await prisma.book.delete({ where: { id: bookId } });
-    await clearCache(); // Invalidate cache
+    
+    await prisma.$transaction(async (tx) => {
+      const orderItemCount = await tx.orderItem.count({ where: { bookId } });
+      if (orderItemCount > 0) {
+        throw new Error('EXISTING_ORDERS');
+      }
+      await tx.review.deleteMany({ where: { bookId } });
+      await tx.book.delete({ where: { id: bookId } });
+    });
+    
+    await clearCache();
     io.emit('books_updated');
     res.json({ success: true });
   } catch (error: any) {
-    if (error.code === 'P2003' || (error.message && error.message.includes('foreign key constraint'))) {
+    if (error.message === 'EXISTING_ORDERS') {
       return res.status(400).json({ error: 'Cannot delete book: It has existing orders.' });
     }
     logger.error(error);
@@ -1616,6 +1671,7 @@ app.get('/api/search', async (req, res) => {
         REPLACE(COALESCE(b.isbn, ''), '-', '') ILIKE $4 OR
         c.name ILIKE $2
       ORDER BY "rankScore" ASC, b.title ASC
+      LIMIT 100
     `;
 
     // We pass parameters separately.
@@ -1657,6 +1713,15 @@ app.get('/api/search', async (req, res) => {
 
 // Global error handler (Performance/Security: never leak stack traces)
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File too large. Maximum size is 10MB.' });
+  }
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ error: 'Too many files uploaded. Only one image is allowed.' });
+  }
+  if (err.message?.includes('Only JPEG')) {
+    return res.status(400).json({ error: 'Only JPEG, PNG, WebP, AVIF, and GIF images are allowed.' });
+  }
   logger.error(err);
   res.status(err.status || 500).json({ error: 'Internal Server Error' });
 });
@@ -1704,7 +1769,7 @@ app.put('/api/admin/categories/reorder', authenticateToken, isAdmin, async (req,
     await prisma.$transaction(updates);
     
     // Clear cache
-    const keys = await redis.keys('*');
+    const keys = await redis.keys(`${CACHE_PREFIX}*`);
     if (keys.length > 0) {
       await redis.del(...keys);
     }
@@ -1717,7 +1782,7 @@ app.put('/api/admin/categories/reorder', authenticateToken, isAdmin, async (req,
   }
 });
 
-app.post('/api/admin/categories', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+app.post('/api/admin/categories', authenticateToken, isAdmin, upload.single('image'), processImageUpload, async (req, res) => {
   try {
     const { name, slug, description } = req.body;
     const image_path = req.file ? `/uploaded_categories/${req.file.filename}` : null;
@@ -1734,7 +1799,7 @@ app.post('/api/admin/categories', authenticateToken, isAdmin, upload.single('ima
   }
 });
 
-app.put('/api/admin/categories/:id', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+app.put('/api/admin/categories/:id', authenticateToken, isAdmin, upload.single('image'), processImageUpload, async (req, res) => {
   try {
     const { name, slug, description } = req.body;
     const updateData: any = { name, slug, description };
@@ -1760,17 +1825,33 @@ app.delete('/api/admin/categories/:id', authenticateToken, isAdmin, async (req, 
   try {
     const categoryId = String(req.params.id);
     
-    // FORCE DELETE for test cleanup: Delete associated books and their order items first
-    const books = await prisma.book.findMany({ where: { categoryId: categoryId } });
-    for (const book of books) {
-      await prisma.orderItem.deleteMany({ where: { bookId: book.id } });
-      await prisma.book.delete({ where: { id: book.id } });
+    // Check if any books in this category have existing orders
+    const booksWithOrders = await prisma.book.findMany({
+      where: { categoryId },
+      include: { orderItems: { take: 1 } }
+    });
+    const hasOrders = booksWithOrders.some(b => b.orderItems.length > 0);
+    if (hasOrders) {
+      return res.status(400).json({ error: 'Cannot delete this category. Some books have existing orders. Please manage those orders first.' });
     }
     
-    await prisma.category.delete({ where: { id: categoryId } });
+    // Safe deletion within a transaction
+    await prisma.$transaction(async (tx) => {
+      const books = await tx.book.findMany({ 
+        where: { categoryId },
+        select: { id: true }
+      });
+      
+      for (const book of books) {
+        await tx.review.deleteMany({ where: { bookId: book.id } });
+      }
+      await tx.book.deleteMany({ where: { categoryId } });
+      await tx.category.delete({ where: { id: categoryId } });
+    });
+    
     await clearCache();
     io.emit('categories_updated');
-    io.emit('books_updated'); // Since books were also deleted
+    io.emit('books_updated');
     res.json({ success: true });
   } catch (error) {
     logger.error(error);
@@ -1781,10 +1862,27 @@ app.delete('/api/admin/categories/:id', authenticateToken, isAdmin, async (req, 
 // User Management APIs
 app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json(users);
+    const page = Number(req.query.page) || 1;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      }),
+      prisma.user.count()
+    ]);
+
+    res.json({ data: users, total, page, totalPages: Math.ceil(total / limit) });
   } catch (error) {
     logger.error(error);
     res.status(500).json({ error: 'Failed to fetch users' });
@@ -1794,18 +1892,27 @@ app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
 // Admin Orders Management
 app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: {
-          select: { name: true, email: true }
-        },
-        items: {
-          include: { book: { select: { title: true, coverImage: true } } }
+    const page = Number(req.query.page) || 1;
+    const limit = Math.min(Number(req.query.limit) || 30, 100);
+
+    const [orders, total] = await Promise.all([
+      prisma.order.findMany({
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: { name: true, email: true }
+          },
+          items: {
+            include: { book: { select: { title: true, coverImage: true, slug: true } } }
+          }
         }
-      }
-    });
-    res.json(orders);
+      }),
+      prisma.order.count()
+    ]);
+
+    res.json({ data: orders, total, page, totalPages: Math.ceil(total / limit) });
   } catch (error) {
     logger.error(error);
     res.status(500).json({ error: 'Failed to fetch orders' });

@@ -17,7 +17,9 @@ export default function SortDropdown({ value, onChange, options }: SortDropdownP
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const selectedOption = options.find(opt => opt.value === value) || options[0];
+  const selectedOption = options.length > 0
+    ? (options.find(opt => opt.value === value) || options[0])
+    : { value: '', label: 'No options' };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

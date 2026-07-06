@@ -5,13 +5,14 @@ import { api } from '../utils/api';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
 import { useToast } from '../context/ToastContext';
-import { Heart, Star, ShoppingCart, ArrowLeft, CheckCircle } from 'lucide-react';
+import { Heart, Star, ShoppingCart, ArrowLeft, CheckCircle, BookOpen } from 'lucide-react';
 
 export default function BookDetail() {
   const { slug } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [qty, setQty] = useState(1);
+  const [imgError, setImgError] = useState(false);
   const [showReviewForm, setShowReviewForm] = useState(false);
   const [reviewData, setReviewData] = useState({ reviewerName: '', rating: 5, title: '', comment: '' });
   
@@ -94,7 +95,18 @@ export default function BookDetail() {
         {/* Left Col - Image */}
         <div className="w-full md:w-1/3 max-w-sm mx-auto md:mx-0 shrink-0 relative">
           <div className={`aspect-[3/4] rounded-2xl overflow-hidden shadow-lg ${isOutOfStock ? 'grayscale opacity-70' : ''}`}>
-            <img src={book.coverImage} alt={book.title} className="w-full h-full object-cover" />
+            {book.coverImage && !imgError ? (
+              <img 
+                src={book.coverImage} 
+                alt={book.title} 
+                className="w-full h-full object-cover" 
+                onError={() => setImgError(true)}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-primary/5 text-primary">
+                <BookOpen size={64} />
+              </div>
+            )}
           </div>
           {isOutOfStock && (
             <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end p-6">

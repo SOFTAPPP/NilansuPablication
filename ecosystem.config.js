@@ -8,9 +8,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "1G",
+      kill_timeout: 10000,
       env: {
         NODE_ENV: "production",
-        PORT: 5002
+        PORT: 5002,
+        FRONTEND_URL: "https://nilansupublication.com"
       }
     }
   ]

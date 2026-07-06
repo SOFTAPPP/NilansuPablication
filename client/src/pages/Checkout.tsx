@@ -48,7 +48,7 @@ export default function Checkout() {
     codCharge = 40;
   }
 
-  const grandTotal = cartTotal + shippingCharge + codCharge - discount;
+  const grandTotal = Math.max(0, cartTotal + shippingCharge + codCharge - discount);
 
   const handleApplyCoupon = () => {
     if (coupon.toLowerCase() === 'welcome20') {
@@ -57,6 +57,14 @@ export default function Checkout() {
     } else {
       setDiscount(0);
       setCouponMessage('Invalid coupon code.');
+    }
+  };
+
+  const handleCouponChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCoupon(e.target.value);
+    if (couponMessage) {
+      setCouponMessage('');
+      setDiscount(0);
     }
   };
 
@@ -73,7 +81,7 @@ export default function Checkout() {
       const orderData = {
         ...formData,
         discount,
-        items: items.map((item: any) => ({
+        items: items.map((item) => ({
           bookId: item.bookId,
           quantity: item.quantity,
           unitPrice: item.unitPrice
@@ -83,7 +91,8 @@ export default function Checkout() {
       if (paymentMethod === 'COD') {
         const response = await api.createCodOrder(orderData);
         dispatch({ type: 'CLEAR_CART' });
-        navigate(`/payment/success?orderId=${response.orderNumber}`);
+        const orderNumber = response.orderNumber || 'N/A';
+        navigate(`/payment/success?orderId=${orderNumber}`);
         return;
       }
       
@@ -94,7 +103,14 @@ export default function Checkout() {
         return;
       }
 
+      if (!(window as any).Razorpay) {
+        showToast("Payment system unavailable. Please try again.", "error");
+        setIsSubmitting(false);
+        return;
+      }
+
       const response = await api.createRazorpayOrder(orderData);
+      const orderNumber = response.orderNumber || 'N/A';
       
       const options = {
         key: response.keyId,
@@ -109,13 +125,13 @@ export default function Checkout() {
               razorpay_order_id: paymentResponse.razorpay_order_id,
               razorpay_payment_id: paymentResponse.razorpay_payment_id,
               razorpay_signature: paymentResponse.razorpay_signature,
-              orderNumber: response.orderNumber,
+              orderNumber: orderNumber,
               orderData: orderData
             });
             dispatch({ type: 'CLEAR_CART' });
-            navigate(`/payment/success?orderId=${response.orderNumber}`);
+            navigate(`/payment/success?orderId=${orderNumber}`);
           } catch (err: any) {
-            navigate(`/payment/failed?orderId=${response.orderNumber}&reason=verification_failed`);
+            navigate(`/payment/failed?orderId=${orderNumber}&reason=verification_failed`);
           }
         },
         prefill: {
@@ -127,13 +143,15 @@ export default function Checkout() {
         modal: {
           ondismiss: function () {
             setIsPaymentOpen(false);
-            navigate(`/payment/failed?reason=cancelled&orderId=${response.orderNumber}`, { replace: true });
+            setIsSubmitting(false);
+            navigate(`/payment/failed?reason=cancelled&orderId=${orderNumber}`, { replace: true });
           }
         }
       };
 
       const rzp = new (window as any).Razorpay(options);
       rzp.on("payment.failed", function (response: any) {
+        setIsSubmitting(false);
         showToast('Payment attempt failed. Please select another payment method.', 'error');
       });
       rzp.open();
@@ -143,6 +161,7 @@ export default function Checkout() {
       console.error(err);
       showToast('Currently technical error is happening. Please try again after 30 minutes.', 'error');
       setIsSubmitting(false);
+      setIsPaymentOpen(false);
     }
   };
 
@@ -152,7 +171,7 @@ export default function Checkout() {
     }
   }, [items.length, isSubmitting, isPaymentOpen, navigate]);
 
-  if (items.length === 0 && !isSubmitting && !isPaymentOpen) {
+  if (items.length === 0) {
     return null;
   }
 
@@ -175,7 +194,6 @@ export default function Checkout() {
         <div className="lg:col-span-2">
           <form id="checkout-form" onSubmit={handleSubmit} className="space-y-8 bg-surface p-6 rounded-2xl border border-divider shadow-sm">
             
-            {/* User Details */}
             <div>
               <h2 className="text-xl font-bold mb-4">Contact Information</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -194,7 +212,6 @@ export default function Checkout() {
               </div>
             </div>
 
-            {/* Shipping Details */}
             <div>
               <h2 className="text-xl font-bold mb-4">Shipping Address</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -247,7 +264,6 @@ export default function Checkout() {
           </form>
         </div>
 
-        {/* Right Column - Summary */}
         <div className="lg:col-span-1">
           <div className="bg-surface rounded-2xl border border-divider p-6 shadow-sm sticky top-24">
             <h3 className="text-xl font-bold text-textPrimary mb-6">Review Order</h3>
@@ -255,11 +271,15 @@ export default function Checkout() {
             <div className="space-y-4 mb-6">
               {items.map(item => (
                 <div key={item.bookId} className="flex gap-4">
-                  <img src={item.coverImage?.includes('uploaded_books') ? `${item.coverImage}?w=100` : item.coverImage} className="w-12 h-16 object-cover rounded bg-muted" alt={item.title} />
+                  {item.coverImage ? (
+                    <img src={item.coverImage?.includes('uploaded_books') ? `${item.coverImage}?w=100` : item.coverImage} className="w-12 h-16 object-cover rounded bg-muted" alt={item.title} />
+                  ) : (
+                    <div className="w-12 h-16 bg-muted rounded flex items-center justify-center text-xs text-textSecondary">No img</div>
+                  )}
                   <div className="flex-1">
                     <h4 className="text-sm font-medium line-clamp-1">{item.title}</h4>
                     <p className="text-xs text-textSecondary">Qty: {item.quantity}</p>
-                    <p className="text-sm font-semibold mt-1">₹{item.unitPrice * item.quantity}</p>
+                    <p className="text-sm font-semibold mt-1">₹{(item.unitPrice || 0) * (item.quantity || 0)}</p>
                   </div>
                 </div>
               ))}
@@ -272,7 +292,7 @@ export default function Checkout() {
                   placeholder="Coupon (e.g., WELCOME20)" 
                   className="input-field text-sm"
                   value={coupon}
-                  onChange={(e) => setCoupon(e.target.value)}
+                  onChange={handleCouponChange}
                 />
                 <button type="button" onClick={handleApplyCoupon} className="btn-secondary py-2 px-4 text-sm">Apply</button>
               </div>
