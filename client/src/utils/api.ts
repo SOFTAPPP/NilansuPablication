@@ -29,7 +29,7 @@ const fetchWithRetry = async (url: string, options: RequestInit = {}, retries = 
 };
 
 export const api = {
-  getBooks: async ({ category, publication, limit = 30, page = 1, cursor, searchQuery = '', sort, inStockOnly, formats }: any) => {
+  getBooks: async ({ category, publication, limit = 30, page = 1, cursor, searchQuery = '', sort, inStockOnly, formats, noCache }: any) => {
     const params = new URLSearchParams({
       limit: limit.toString(),
       ...(cursor !== undefined ? { cursor: cursor.toString() } : { page: page.toString() }),
@@ -39,7 +39,7 @@ export const api = {
       ...(sort && { sort }),
       ...(inStockOnly && { inStockOnly: 'true' }),
       ...(formats && formats.length > 0 && { formats: formats.join(',') }),
-      t: Date.now().toString() // Aggressively bust SW cache
+      ...(noCache && { t: Date.now().toString() }),
     });
     
     const response = await fetchWithRetry(`${API_URL}/books?${params}`, defaultOptions);
@@ -54,22 +54,19 @@ export const api = {
   },
   
   getBookBySlug: async (slug: string) => {
-    const params = new URLSearchParams({ t: Date.now().toString() });
-    const response = await fetchWithRetry(`${API_URL}/books/${slug}?${params}`, defaultOptions);
+    const response = await fetchWithRetry(`${API_URL}/books/${slug}`, defaultOptions);
     if (!response.ok) throw new Error("Book not found");
     return response.json();
   },
   
   getTrendingBooks: async () => {
-    const params = new URLSearchParams({ t: Date.now().toString() });
-    const response = await fetchWithRetry(`${API_URL}/books/trending?${params}`, defaultOptions);
+    const response = await fetchWithRetry(`${API_URL}/books/trending`, defaultOptions);
     if (!response.ok) throw new Error('Failed to fetch trending books');
     return response.json();
   },
   
   getBookReviews: async (bookId: string) => {
-    const params = new URLSearchParams({ t: Date.now().toString() });
-    const response = await fetchWithRetry(`${API_URL}/books/${bookId}/reviews?${params}`, defaultOptions);
+    const response = await fetchWithRetry(`${API_URL}/books/${bookId}/reviews`, defaultOptions);
     if (!response.ok) throw new Error('Failed to fetch reviews');
     return response.json();
   },
@@ -88,11 +85,11 @@ export const api = {
     return response.json();
   },
   
-  getCategories: async ({ cursor, limit = 16 }: any = {}) => {
+  getCategories: async ({ cursor, limit = 16, noCache }: any = {}) => {
     const params = new URLSearchParams({
       limit: limit.toString(),
       ...(cursor !== undefined && { cursor: cursor.toString() }),
-      t: Date.now().toString() // Aggressively bust SW cache
+      ...(noCache && { t: Date.now().toString() }),
     });
     const response = await fetchWithRetry(`${API_URL}/categories?${params}`, defaultOptions);
     if (!response.ok) throw new Error('Failed to fetch categories');
@@ -100,8 +97,7 @@ export const api = {
   },
 
   getPublications: async () => {
-    const params = new URLSearchParams({ t: Date.now().toString() });
-    const response = await fetchWithRetry(`${API_URL}/publications?${params}`, defaultOptions);
+    const response = await fetchWithRetry(`${API_URL}/publications`, defaultOptions);
     if (!response.ok) throw new Error('Failed to fetch publications');
     return response.json();
   },
