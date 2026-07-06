@@ -233,7 +233,8 @@ app.post("/api/payment/webhook", express.raw({ type: "application/json" }), asyn
   }
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(compression({ level: 6 })); // Performance: Brotli/Gzip compression for responses > 1kb
 app.use(cookieParser());
 
@@ -1719,7 +1720,7 @@ app.put('/api/admin/categories/reorder', authenticateToken, isAdmin, async (req,
 app.post('/api/admin/categories', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
   try {
     const { name, slug, description } = req.body;
-    const image_path = req.file ? `http://localhost:${PORT}/uploaded_categories/${req.file.filename}` : null;
+    const image_path = req.file ? `/uploaded_categories/${req.file.filename}` : null;
     
     const category = await prisma.category.create({
       data: { name, slug, description, image_path } as any
@@ -1739,7 +1740,7 @@ app.put('/api/admin/categories/:id', authenticateToken, isAdmin, upload.single('
     const updateData: any = { name, slug, description };
     
     if (req.file) {
-      updateData.image_path = `http://localhost:${PORT}/uploaded_categories/${req.file.filename}`;
+      updateData.image_path = `/uploaded_categories/${req.file.filename}`;
     }
     
     const category = await prisma.category.update({
