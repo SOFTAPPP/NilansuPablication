@@ -14,7 +14,7 @@ import { queryClient } from './main';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 // Initialize socket connection
-const socket = io(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000', {
+const socket = io(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5002', {
   withCredentials: true,
 });
 
@@ -56,7 +56,7 @@ const AdminRoute = ({ children }: { children: JSX.Element }) => {
 
   useEffect(() => {
     if (user && user.role === 'ADMIN' && token) {
-      fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/api/admin/validate-token/${token}`, { credentials: 'include' })
+      fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5002'}/api/admin/validate-token/${token}`, { credentials: 'include' })
         .then(res => {
           if (res.ok) setIsValid(true);
           setIsValidating(false);
