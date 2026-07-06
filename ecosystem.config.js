@@ -13,7 +13,11 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 5002,
         FRONTEND_URL: "https://nilansupublication.com"
-      }
+      },
+      // Error logging configuration
+      error_file: "/var/log/pm2/nilansu-backend-error.log",
+      out_file: "/var/log/pm2/nilansu-backend-out.log",
+      time: true
     }
   ]
 };
