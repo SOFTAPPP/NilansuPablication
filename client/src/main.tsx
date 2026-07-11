@@ -10,8 +10,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 0, // Always fetch fresh to ensure real-time UI updates (backend Redis handles caching)
-      gcTime: 10 * 60 * 1000, // 10 minutes
+      staleTime: 0, 
+      gcTime: 10 * 60 * 1000, 
       refetchOnWindowFocus: false,
       retry: 1,
     },
@@ -20,7 +20,8 @@ export const queryClient = new QueryClient({
 
 const updateSW = registerSW({
   onNeedRefresh() {
-    console.log('New content available, refresh to update.');
+    console.log('New content available, forcing reload to update.');
+    updateSW(true);
   },
   onOfflineReady() {
     console.log('App ready to work offline');

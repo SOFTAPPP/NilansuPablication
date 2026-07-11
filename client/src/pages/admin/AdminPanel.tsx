@@ -6,6 +6,9 @@ import { useAuth } from '../../context/AuthContext';
 import { useDialog } from '../../context/DialogContext';
 import { useToast } from '../../context/ToastContext';
 import { api } from '../../utils/api';
+
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:5002/api');
+
 function slugify(text: string) {
   return text.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '');
 }
@@ -148,7 +151,7 @@ function AdminStats() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/stats`, { credentials: 'include' });
+      const res = await fetch(`${API_URL}/admin/stats`, { credentials: 'include' });
       if (res.ok) setStats(await res.json());
     } catch (e) {
       console.error(e);
@@ -276,13 +279,13 @@ function BooksManager({ onEditingChange }: { onEditingChange?: (isEditing: boole
     const isConfirmed = await confirm({ title: 'Delete Book', message: 'Are you sure you want to delete this book? This action cannot be undone.', type: 'danger', confirmText: 'Delete' });
     if (!isConfirmed) return;
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/books/${id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await fetch(`${API_URL}/admin/books/${id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to delete book');
       }
+      setBooks(prev => prev.filter(b => b.id !== id));
       showToast('Book deleted successfully', 'success');
-      fetchBooks();
     } catch (e: any) {
       console.error(e);
       showToast(e.message || 'Failed to delete book', 'error');
@@ -390,7 +393,14 @@ function BooksManager({ onEditingChange }: { onEditingChange?: (isEditing: boole
             book={currentBook}
             categories={categories}
             publications={publications}
-            onSave={() => setView('list')}
+            onSave={(savedBook: any) => {
+              if (currentBook) {
+                setBooks(prev => prev.map(b => b.id === savedBook.id ? { ...b, ...savedBook, category: categories.find(c => c.id === savedBook.categoryId)?.name || b.category } : b));
+              } else {
+                setBooks(prev => [savedBook, ...prev]);
+              }
+              setView('list');
+            }}
             onCancel={() => setView('list')}
           />
         </motion.div>
@@ -399,7 +409,7 @@ function BooksManager({ onEditingChange }: { onEditingChange?: (isEditing: boole
   );
 }
 
-function BookForm({ book, categories, publications, onSave, onCancel }: any) {
+function BookForm({ book, categories, publications, onSave, onCancel }: { book: any; categories: any[]; publications: any[]; onSave: (saved: any) => void; onCancel: () => void }) {
   const { showToast } = useToast();
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
@@ -470,7 +480,7 @@ function BookForm({ book, categories, publications, onSave, onCancel }: any) {
       data.append('coverImage', book.coverImage);
     }
 
-    const url = book ? `${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/books/${book.id}` : `${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/books`;
+    const url = book ? `${API_URL}/admin/books/${book.id}` : `${API_URL}/admin/books`;
     const method = book ? 'PUT' : 'POST';
 
     try {
@@ -480,8 +490,9 @@ function BookForm({ book, categories, publications, onSave, onCancel }: any) {
         credentials: 'include'
       });
       if (res.ok) {
+        const savedData = await res.json();
         showToast(book ? 'Book updated successfully' : 'Book added successfully', 'success');
-        onSave();
+        onSave(savedData);
       } else {
         const errorData = await res.json();
         showToast(`Failed to save book: ${errorData.error || 'Unknown error'}`, 'error');
@@ -716,14 +727,14 @@ function CategoriesManager({ onEditingChange }: { onEditingChange?: (isEditing: 
     const isConfirmed = await confirm({ title: 'Delete Category', message: 'Are you sure you want to delete this category? Books mapped to this category will prevent deletion.', type: 'danger', confirmText: 'Delete' });
     if (!isConfirmed) return;
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/categories/${id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await fetch(`${API_URL}/admin/categories/${id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) {
         const data = await res.json();
         showToast(`Cannot delete: ${data.error}`, 'error');
         return;
       }
+      setCategories(prev => prev.filter(c => c.id !== id));
       showToast('Category deleted successfully', 'success');
-      fetchCategories();
     } catch (e) {
       console.error(e);
       showToast('Failed to delete category', 'error');
@@ -823,7 +834,14 @@ function CategoriesManager({ onEditingChange }: { onEditingChange?: (isEditing: 
         >
           <CategoryForm
             category={currentCategory}
-            onSave={() => setView('list')}
+            onSave={(savedCategory: any) => {
+              if (currentCategory) {
+                setCategories(prev => prev.map(c => c.id === savedCategory.id ? { ...c, ...savedCategory } : c));
+              } else {
+                setCategories(prev => [savedCategory, ...prev]);
+              }
+              setView('list');
+            }}
             onCancel={() => setView('list')}
           />
         </motion.div>
@@ -832,7 +850,7 @@ function CategoriesManager({ onEditingChange }: { onEditingChange?: (isEditing: 
   );
 }
 
-function CategoryForm({ category, onCancel, onSave }: any) {
+function CategoryForm({ category, onCancel, onSave }: { category: any; onCancel: () => void; onSave: (saved: any) => void }) {
   const [formData, setFormData] = useState({
     name: category?.name || '',
     slug: category?.slug || '',
@@ -864,7 +882,7 @@ function CategoryForm({ category, onCancel, onSave }: any) {
       data.append('image', imageFile);
     }
 
-    const url = category ? `${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/categories/${category.id}` : `${import.meta.env.VITE_API_URL || 'http://localhost:5002/api'}/admin/categories`;
+    const url = category ? `${API_URL}/admin/categories/${category.id}` : `${API_URL}/admin/categories`;
     const method = category ? 'PUT' : 'POST';
 
     try {
@@ -874,8 +892,9 @@ function CategoryForm({ category, onCancel, onSave }: any) {
         credentials: 'include'
       });
       if (res.ok) {
+        const savedData = await res.json();
         showToast(category ? 'Category updated successfully' : 'Category created successfully', 'success');
-        onSave();
+        onSave(savedData);
       } else {
         const err = await res.json();
         showToast(`Failed to save category: ${err.error || 'Unknown error'}`, 'error');

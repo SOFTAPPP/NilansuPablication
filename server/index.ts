@@ -1497,15 +1497,25 @@ app.post('/api/admin/books', authenticateToken, isAdmin, upload.single('image'),
         categoryId: categoryRecord.id,
         publications: { connect: pubIds.map(id => ({ id })) },
         isTrending: data.isTrending === 'true'
+      },
+      include: {
+        category: { select: { name: true } },
+        publications: { select: { name: true, id: true } }
       }
     });
+
+    const formattedBook = {
+      ...book,
+      category: book.category?.name,
+      publicationName: book.publications?.map((p: any) => p.name).join(', ') || null
+    };
 
     // Automatically generate realistic reviews asynchronously
     generateReviewsForBook(book.id).catch((e: any) => logger.error(e, "Background review generation failed"));
 
     await clearCache(); // Invalidate cache
     io.emit('books_updated'); // Emit real-time event
-    res.json(book);
+    res.json(formattedBook);
   } catch (error: any) {
     logger.error(error);
     if (error.code === 'P2002') {
@@ -1570,12 +1580,22 @@ app.put('/api/admin/books/:id', authenticateToken, isAdmin, upload.single('image
 
     const book = await prisma.book.update({
       where: { id: bookId },
-      data: updateData
+      data: updateData,
+      include: {
+        category: { select: { name: true } },
+        publications: { select: { name: true, id: true } }
+      }
     });
+
+    const formattedBook = {
+      ...book,
+      category: book.category?.name,
+      publicationName: book.publications?.map((p: any) => p.name).join(', ') || null
+    };
 
     await clearCache(); // Invalidate cache
     io.emit('books_updated'); // Emit real-time event
-    res.json(book);
+    res.json(formattedBook);
   } catch (error: any) {
     logger.error(error);
     if (error.code === 'P2002') {

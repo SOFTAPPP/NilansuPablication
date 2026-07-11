@@ -176,22 +176,27 @@ function HeroSlider() {
   };
 
   return (
-    <section className="relative overflow-hidden h-[400px] md:h-[500px]">
+    <section className={`relative overflow-hidden h-[400px] md:h-[500px] transition-colors duration-700 ${slides[current].bg}`}>
+      {/* Static Background Effects (Disabled on mobile to guarantee smooth 60fps) */}
+      <div className="absolute inset-0 hidden md:dark:block opacity-40 pointer-events-none transition-colors duration-700">
+         <div className={`absolute -top-[30%] -left-[10%] w-[70%] h-[70%] ${slides[current].glow1} rounded-full blur-[120px] mix-blend-screen transition-colors duration-500`}></div>
+         <div className={`absolute top-[40%] -right-[10%] w-[60%] h-[60%] ${slides[current].glow2} rounded-full blur-[100px] mix-blend-screen transition-colors duration-500`}></div>
+      </div>
+      
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none hidden md:block dark:hidden">
+        <div className="absolute -top-20 -left-20 w-64 h-64 bg-primary/10 rounded-full blur-3xl transition-colors duration-700"></div>
+        <div className="absolute top-40 -right-20 w-80 h-80 bg-primary/5 rounded-full blur-3xl transition-colors duration-700"></div>
+      </div>
+
       <AnimatePresence mode="wait">
         <motion.div
           key={current}
-          initial={{ opacity: 0, x: 50 }}
+          initial={{ opacity: 0, x: 20 }} // Extremely short travel distance for max performance
           animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -50 }}
-          transition={{ duration: 0.5 }}
-          className={`absolute inset-0 flex flex-col items-center justify-center text-center px-4 ${slides[current].bg}`}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3 }} // Faster, snappier transition
+          className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 will-change-transform"
         >
-          {/* Premium Dark Mode Gradient Background */}
-          <div className="absolute inset-0 hidden dark:block opacity-40">
-             <div className={`absolute -top-[30%] -left-[10%] w-[70%] h-[70%] ${slides[current].glow1} rounded-full blur-[120px] mix-blend-screen`}></div>
-             <div className={`absolute top-[40%] -right-[10%] w-[60%] h-[60%] ${slides[current].glow2} rounded-full blur-[100px] mix-blend-screen`}></div>
-          </div>
-          
           <div className="container mx-auto relative z-10 flex flex-col items-center">
             <h1 className="text-4xl md:text-5xl lg:text-7xl font-extrabold text-textPrimary mb-6 max-w-4xl leading-tight drop-shadow-sm">
               {slides[current].title}
@@ -202,11 +207,6 @@ function HeroSlider() {
             <Link to={slides[current].link} className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4 shadow-lg hover:shadow-primary/30">
               {slides[current].buttonText} <ArrowRight size={20} />
             </Link>
-          </div>
-          {/* Decorative Background Elements (Light mode) */}
-          <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none dark:hidden">
-            <div className="absolute -top-20 -left-20 w-64 h-64 bg-primary/10 rounded-full blur-3xl"></div>
-            <div className="absolute top-40 -right-20 w-80 h-80 bg-primary/5 rounded-full blur-3xl"></div>
           </div>
         </motion.div>
       </AnimatePresence>
